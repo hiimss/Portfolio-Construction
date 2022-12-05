@@ -1,0 +1,384 @@
+---
+title: "Fin_Group06"
+author: Lam Wen Jett A0234935Y, Lee De Kai A0233481J, Lee Shan Shan A0241238L, Low Mei Lin A0240908E, Sng Wei Zhen Shanice A0239813Y
+date: "2022-11-11"
+output: beamer_presentation
+---
+```{r library, include = FALSE, echo = FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, comment="")
+library(dplyr)
+library(fPortfolio)
+library(quantmod)
+library(readxl)
+library(PerformanceAnalytics)
+library(tidyverse)
+library(knitr)
+library(corrplot)
+library(kableExtra)
+library(xts)
+```
+
+```{r getMarketPortfolio, include=FALSE, echo = FALSE, warning = FALSE, message =FALSE }
+# Obtain market portfolio consisting of 60% ACWI and 40% BGA 
+refDate = as.Date("2001-10-01")
+
+# Obtain ACWI data
+ACWI.data = getSymbols("ACWI",from=refDate,auto.assign= F)
+#Convert ACWI to monthly returns
+ACWIRets = periodReturn(ACWI.data,period="monthly")*0.6
+
+#Obtain BGA data 
+BGA.data = getSymbols("BGA",from=refDate,auto.assign=F)
+#Convert BGA to montlhly returns 
+BGARets = periodReturn(BGA.data,period="monthly")*0.4
+
+#Add together BGA and ACWI to get final market portfolio
+mktPort = ACWIRets+BGARets
+```
+
+```{r scrape_ETF_Monthly_returns, echo = FALSE, warning = FALSE, message=FALSE}
+# Scrape monthly returns of all chosen ETFs from online
+selected.ETFs = c("AGG","SCHP","VCSH","BNDX","1306.T","VOO","VGK","VWO","VNQ","VNQI","IAU","BCI")
+
+etf.monthly.returns =c()
+for (etf in selected.ETFs) {
+  etf.data = getSymbols(etf,from=refDate,auto.assign = F)
+  etf.data.monthly = periodReturn(etf.data,period="monthly")
+  if (etf == "1306.T") {
+    #Convert prices for 1306.T from JPY to USD
+    jpy.to.usd.rate = getSymbols("JPY=X",from=refDate,auto.assign = F)$`JPY=X.Adjusted`
+    etf.data.monthly = etf.data.monthly/jpy.to.usd.rate
+  }
+  etf.monthly.returns = cbind(etf.monthly.returns,etf.data.monthly)
+  }
+names(etf.monthly.returns)=selected.ETFs
+```
+
+```{r proxyvalues, echo = FALSE, warning = FALSE, message=FALSE}
+# Use proxy prices to fill in NA data values in etf.monthly.returns 
+etf.proxies = c("IUSB","SCHR","VTC","BNDW","1305.T","SPY","VESIX","SCHE","VGSNX","VSS","SDOW","DBC")
+
+# Collect proxy prices into a df 
+etf.proxy.monthly.returns =c()
+for (proxy in etf.proxies) {
+    etf.proxy.data = getSymbols(proxy,from=refDate,auto.assign = F)
+    etf.proxy.data.monthly = periodReturn(etf.data,period="monthly")
+  if (proxy == "1305.T") {
+    #Convert prices for 1305.T from JPY to USD
+    jpy.to.usd.rate = getSymbols("JPY=X",from=refDate,auto.assign = F)$`JPY=X.Adjusted`
+    etf.proxy.data.monthly = etf.proxy.data.monthly/jpy.to.usd.rate
+  }
+  etf.proxy.monthly.returns = cbind(etf.proxy.monthly.returns,etf.proxy.data.monthly)
+}
+
+# Ensure that the start and end dates for the proxy and ETF data frames match (both start from 2006-02-28)
+etf.monthly.returns = etf.monthly.returns[183:nrow(etf.monthly.returns)-1,]
+for (col in 1:ncol(etf.monthly.returns)) {
+  for (row in 1:nrow(etf.monthly.returns)) {
+    etf.cell.value = etf.monthly.returns[row,col]
+    etf.proxy.value = etf.proxy.monthly.returns[row,col]
+    if (is.na(etf.cell.value) & !is.na(etf.proxy.value)) {
+      etf.cell.value = etf.proxy.value
+    }
+  }
+}
+
+#Omit all NA values from the ETF returns df 
+etf.monthly.returns=na.omit(etf.monthly.returns)
+```
+```{r capm,  echo = FALSE, warning = FALSE, message=FALSE}
+a.CAPM <- c()
+b.CAPM <- c()
+for(val in 1:ncol(etf.monthly.returns)) {
+  x.CAPM <- mktPort$monthly.returns
+  y.CAPM <- etf.monthly.returns[,val]
+  combined.CAPM <- merge(y.CAPM, x.CAPM)
+  merge.CAPM <-  na.omit(combined.CAPM)
+  reg.CAPM <- lm(merge.CAPM[,1]~merge.CAPM[,2]) 
+  a.CAPM <- c(a.CAPM, summary(reg.CAPM)$coefficients[1])
+  b.CAPM <- c(b.CAPM, summary(reg.CAPM)$coefficients[2])
+}
+coefficients.CAPM<- data.frame(a.CAPM, b.CAPM)
+rownames(coefficients.CAPM) <- selected.ETFs
+colnames(coefficients.CAPM) <- c("CAPM Alpha","CAPM Beta")
+```
+
+```{r data read-in, include=FALSE, echo=FALSE, warning = FALSE, message = FALSE}
+#Read in forex 
+FX <- read_excel("ETFfxReturns.xlsx", sheet = "FX")
+FX
+
+#Read in static
+static_data <- read_excel("ETFfxReturns.xlsx", sheet = "Static")
+static_data
+
+#Read in daily returns and convert EQUITIES FIRST to JPY currency
+data <- read_excel("ETFfxReturns.xlsx")
+data
+```
+
+```{r converting-ETF, include=FALSE}
+ETF.returns <- subset(data, select = -c(1,2,3))
+
+#Removed ETFs
+data.new <- subset(data, select = -c(8,11,12,15))
+
+#Removed ETFs without x, mkt, rf
+ETF.returns.new <- subset(data.new, select = -c(1,2,3))
+
+#Column names of ETFs without x, mkt, rf
+ETF.names <- colnames(ETF.returns.new)
+
+#Converting ETF returns from JPY to USD
+ETF.returns.converted <- ETF.returns.new
+for (name in ETF.names) {
+  print(name)
+  if (name == "1306 JT Equity") {
+  new <- (1+ETF.returns.new[name])*(1+(FX$USDJPY.Curncy))-1
+  ETF.returns.converted[name] <- new
+  }
+}
+
+#Include the Annualised return, beta for each ETFs
+db_xts <- as.xts(ETF.returns.converted, order.by = data$x)
+db_annualisedReturn <- Return.annualized(db_xts)
+db_annualisedReturn <- round(db_annualisedReturn * 100, 2)
+coefficients.CAPM <- round(coefficients.CAPM, 3)
+
+db_equities_bonds <- static_data[c(7:10,12,13,15,16),c(1:2, 4, 6:8, 10,13)]
+db_equities_bonds$Availability <- format(as.Date(db_equities_bonds$Availability), "%Y") 
+db_equities_bonds$AnnualisedReturn <- c(db_annualisedReturn[,5],
+                                        db_annualisedReturn[,8],
+                                        db_annualisedReturn[,7],
+                                        db_annualisedReturn[,4],
+                                        db_annualisedReturn[,2],
+                                        db_annualisedReturn[,1],
+                                        db_annualisedReturn[,3],
+                                        db_annualisedReturn[,6])
+db_equities_bonds$Beta <- c(coefficients.CAPM$`CAPM Beta`[5],
+                            coefficients.CAPM$`CAPM Beta`[8],
+                            coefficients.CAPM$`CAPM Beta`[7],
+                            coefficients.CAPM$`CAPM Beta`[4],
+                            coefficients.CAPM$`CAPM Beta`[2],
+                            coefficients.CAPM$`CAPM Beta`[1],
+                            coefficients.CAPM$`CAPM Beta`[3],
+                            coefficients.CAPM$`CAPM Beta`[6])
+
+db_reits <- static_data[c(5:6),c(1:2, 4, 6:8, 10,13)]
+db_reits$Availability <- format(as.Date(db_reits$Availability), "%Y") 
+db_reits$AnnualisedReturn <- c(db_annualisedReturn[,9],
+                               db_annualisedReturn[,10])
+db_reits$Beta <- c(coefficients.CAPM$`CAPM Beta`[9],
+                   coefficients.CAPM$`CAPM Beta`[10])
+
+
+db_commodities <- static_data[c(1:2),c(1:2, 4, 6:8, 10,13)]
+db_commodities$Availability <- format(as.Date(db_commodities$Availability), "%Y") 
+db_commodities$AnnualisedReturn <- c(db_annualisedReturn[,11],
+                                     db_annualisedReturn[,12])
+db_commodities$Beta <- c(coefficients.CAPM$`CAPM Beta`[11],
+                         coefficients.CAPM$`CAPM Beta`[12])
+```
+
+# Approach
+1. Decided on ETFs to eliminate based on certain criterion (shown in the appendix)
+    + Correlation matrix: Removed ETFs that have a correlation above 0.90 
+    + Expense ratio: Removed ETFs with high expense ratio (fees) -> Affect net asset value 
+    + B/A spread: Removed ETFs with high B/A spread -> Low liquidity 
+
+2. Ran CAPM regression on selected ETFs and obtained beta values -> Risk and Return potential
+
+3. Plotted efficient frontier based on selected ETFs to construct our portfolios and weights
+    + Low Risk Portfolio -> Global Minimum Variance Portfolio
+    + Medium Risk Portfolio -> Efficient Portfolio
+    + High Risk Portfolio -> Maximum Return Portfolio
+
+4. Conducted backtesting on portfolios against market return and equal weighted portfolio -> Valid comparison of the risks and returns across the 20 year time period
+
+
+# ETFs Summary
+## Equities and Bonds
+```{r Equities & Bonds}
+kable(db_equities_bonds) %>% kable_styling(latex_options = "scale_down")
+```
+# ETFs Summary
+## REITs
+```{r REITs}
+kable(db_reits) %>% kable_styling(latex_options = "scale_down")
+```
+
+## Commodities
+```{r Commodities}
+kable(db_commodities) %>% kable_styling(latex_options = "scale_down")
+```
+
+
+# Efficient Frontier
+```{r EF_plots, echo=FALSE, warning = FALSE, message = FALSE}
+etfs <- ETF.returns.converted
+
+#as.timeseries
+nfunds <- NCOL(etfs)
+library(fPortfolio)
+Spec <- portfolioSpec()
+myret <- as.timeSeries(etfs)
+
+##Constraints
+low.bound <- paste0("minW[1:", nfunds, "]=.1")
+high.bound <- paste0("maxW[1:", nfunds, "]=.5")
+const <- c(low.bound, high.bound)
+
+#Include rf
+rk.free <- mean(data$rf)
+Spec.rf <- Spec
+setRiskFreeRate(Spec.rf) <- rk.free
+mymvf <- portfolioFrontier(myret, Spec.rf)
+tailoredFrontierPlot(mymvf, return="mu", risk="Sigma")
+```
+
+```{r EWP_risk_return, include = FALSE, echo=FALSE, warning = FALSE, message = FALSE}
+ewSpec <- Spec
+setWeights(ewSpec) <- rep(1/nfunds, times = nfunds)
+setRiskFreeRate(ewSpec) <- mean(data$rf)
+ewp <- feasiblePortfolio(myret, ewSpec)
+equal.w <- getWeights(ewp)
+
+weightsPie(ewp, box = FALSE)
+
+getTargetReturn(ewp)["mean"]
+getTargetRisk(ewp)["Cov"]
+
+(((getTargetReturn(ewp)["mean"]+1)^365)-1)*100
+round(getTargetRisk(ewp)["Cov"]*sqrt(365)*100, 1)
+```
+
+# Low Risk Portfolio
+
+```{r GMVP_LOW_risk_and_return, echo=FALSE, warning = FALSE, message = FALSE}
+setRiskFreeRate(Spec) <- 0.00116 # based on Jap 20Years Bond
+gmvp <- minvariancePortfolio(myret, Spec, constraints = "LongOnly")
+gmv.w <- getWeights(gmvp)
+weightsPie(gmvp, box = FALSE)
+
+#Calculate annualised returns and risk
+Annualised_Return_Low <- round((((getTargetReturn(gmvp)["mean"]+1)^365)-1)*100, 1)
+Annualised_Risk_Low <- round(getTargetRisk(gmvp)["Cov"]*sqrt(365)*100, 1)
+Low_Risk_Returns <- cbind(paste(Annualised_Return_Low, "%"), 
+                          paste(Annualised_Risk_Low, "%"))
+colnames(Low_Risk_Returns) <- c("Annual Return", "Annual Risk")
+kable(Low_Risk_Returns)
+
+```
+
+# Mid Risk Portfolio
+
+```{r mid_risk, echo=FALSE, warning = FALSE, message = FALSE}
+setTargetReturn(Spec) <- getTargetReturn(ewp)["mean"]
+mvp <- efficientPortfolio(myret, Spec)
+mv.w <- getWeights(mvp)
+weightsPie(mvp, box = FALSE)
+Annualised_Return_Mid <- round((((getTargetReturn(mvp)["mean"]+1)^365)-1)*100, 1)
+Annualised_Risk_Mid <- round(getTargetRisk(mvp)["Cov"]*sqrt(365)*100, 1)
+Mid_Risk_Returns <- cbind(paste(Annualised_Return_Mid, "%"), 
+                          paste(Annualised_Risk_Mid, "%"))
+colnames(Mid_Risk_Returns) <- c("Annual Return", "Annual Risk")
+kable(Mid_Risk_Returns)
+
+
+```
+
+# High Risk Portfolio
+
+```{r max_HIGH_return, echo=FALSE, warning = FALSE, message = FALSE}
+Spec.Obj.risk <- Spec
+setSolver(Spec.Obj.risk) <- "solveRshortExact"
+setTargetRisk(Spec.Obj.risk) <- 0.005
+maxp <- maxreturnPortfolio(myret, Spec.Obj.risk, constraints = "Long")
+max.w <- getWeights(maxp)
+weightsPie(maxp, box = FALSE)
+
+#Calculate annualised returns and risk
+Annualised_Return_High <- round((((getTargetReturn(maxp)["mean"]+1)^365)-1)*100,1)
+Annualised_Risk_High <- round(getTargetRisk(maxp)["Cov"]*sqrt(365)*100, 1)
+High_Risk_Returns <- cbind(paste(Annualised_Return_High, "%"), 
+                          paste(Annualised_Risk_High, "%"))
+colnames(High_Risk_Returns) <- c("Annual Return", "Annual Risk")
+kable(High_Risk_Returns)
+```
+# Back Test of Portfolio
+
+```{r backtesting, echo=FALSE, warning = FALSE, message = FALSE}
+#low risk
+lowSum <- ETF.returns.converted * (gmv.w[col(ETF.returns.converted)])
+lowSum$Sum <- rowSums(lowSum[,1:12])
+
+#mid risk
+midSum <-ETF.returns.converted * (mv.w[col(ETF.returns.converted)])
+midSum$Sum <- rowSums(midSum[,1:12])
+
+#high risk
+highSum <- ETF.returns.converted * (max.w[col(ETF.returns.converted)])
+highSum$Sum <- rowSums(highSum[,1:12])
+
+#ewp
+eSum <- ETF.returns.converted * (equal.w[col(ETF.returns.converted)])
+eSum$Sum <- rowSums(eSum[,1:12])
+
+
+ports <- cbind(lowSum$Sum, midSum$Sum, highSum$Sum, eSum$Sum, data$mkt)
+portsframe <- as.data.frame(ports)
+portsframe <- cbind(data$x, portsframe)
+portsframe <- rename(portsframe, x = `data$x`, low_risk = V1, mid_risk = V2, high_risk = V3, ewp = V4, mkt = V5)
+
+portsframe.xts <- xts(x = portsframe[,c(2,3,4,5,6)],
+                      order.by = as.Date(portsframe$x))
+chart.CumReturns(portsframe.xts, main = "Cumulative Returns for Portfolios", legend.loc="topleft")
+```
+
+# Performance of Portfolio 
+* High Risk Portfolio
+    + Portfolio involves short-ing the ETFs, in order to profit when prices of ETFs falls and hence contains higher risk
+    + Outperforms the market cumulative returns and equal weight portfolio, however the cumulative returns also varies much more as well due to the higher risk
+* Mid Risk Portfolio
+    + Performs similar to the equal-weighted portfolio and outperforms the market cumulative returns
+* Low Risk Portfolio
+    + Performs mediocre compared to other portfolios
+    + However since it has lower risk, relatively more stable across the years despite major drops in 2008 and 2019 as seen in the other portfolios
+
+
+# Appendix
+## Rationale for removal of ETFs
+* VO
+    + Have a high correlation with VOO at 0.96.
+    + However, remove VO instead as it has a higher B/A spread (0.13) compared to VOO (0.02) → Higher B/A spread corresponds to lower liquidity. 
+    
+* VWOB
+    + High expense ratio of 0.2 → Did not remove BCI and IAU as they are commodities and we want a diverse portfolio
+    + High B/A spread of 0.08 based on the 75th percentile (0.075) → Higher B/A spread corresponds to lower liquidity
+
+```{r corr}
+db_correlation = cor(data[,4:19], use="pairwise.complete.obs")
+kable(db_correlation[c(7,8,10), c(7,8,10)]) %>% kable_styling(latex_options = "scale_down")
+```
+
+# Appendix
+## Rationale for removal of ETFs
+* 1343.JT
+    + Highest B/A spread of 4 and high expense ratio of 0.155
+    + 1343.JT is also omitted as VNQI already possesses stocks in 1343.JT
+    
+* VSS
+    + High B/A spread of 0.29
+    + Has the lowest trading volume, 354313.5, out of all stocks
+    
+* 1306.T
+    + Have a relatively high B/A spread of 1. However, we chose not to remove to maintain a diversified portfolio. 
+  
+# Appendix
+## Correlation Matrix
+```{r correlation}
+db_correlation <- round(db_correlation,3)
+kable(db_correlation) %>% kable_styling(latex_options = "scale_down")
+```
+
+
